@@ -5,7 +5,11 @@ A simple demonstration game for the MAGLabs 2017 Swadge.
 
 from autobahn.asyncio.wamp import ApplicationSession, ApplicationRunner
 from autobahn.wamp import auth
+from collections import deque
+import itertools
+import flaschen
 import asyncio
+import random
 import time
 
 
@@ -39,6 +43,9 @@ class Color:
 
     RAINBOW = [RED, ORANGE, YELLOW, GREEN, CYAN, BLUE, PURPLE]
 
+def hex_to_rgb(color):
+    return ((color & 0xff0000) >> 16, (color & 0x00ff00) >> 8, color & 0x0000ff)
+
 
 def lighten(amt, color):
     """
@@ -62,14 +69,14 @@ WAMP_PASSWORD = "hunter2"
 
 # This is a unique name for this game
 # Change this before you run it, otherwise it will conflict!
-GAME_ID = "demo_game"
+GAME_ID = "sign-game"
 
 # This is a unique button sequence a swadge can enter to join this game.
 # This can be changed at any time, as long as the new value is unique.
 # Setting this to the empty string will disable joining by sequence.
 # Maximum length is 12; 6 is recommended.
 # Buttons are [u]p, [l]eft, [d]own, [r]ight, s[e]lect, [s]tart, [a], [b]
-GAME_JOIN_SEQUENCE = "uuddlrlrbaes"
+GAME_JOIN_SEQUENCE = "uuuddba"
 
 # This is the name of a location that will cause a swadge to automatically
 # join the game without needing to press any buttons. They will also leave
@@ -85,69 +92,102 @@ GAME_JOIN_SEQUENCE = "uuddlrlrbaes"
 # - panels1
 # - gameroom
 # - concerts
-GAME_JOIN_LOCATION = "panels1"
+GAME_JOIN_LOCATION = None
 
+WIDTH = 512
+HEIGHT = 32
 
 class PlayerInfo:
+    COLOR_WHEEL = itertools.cycle(Color.RAINBOW)
+
     def __init__(self, badge_id, subscriptions=None):
         self.badge_id = badge_id
 
-        # The index of the currently selected light
-        self.selected_light = 0
-
-        # The brightness level of each light. The lights are suuuper bright, and having them set
-        # all the way up for long periods of time will drain the batteries and blind everyone
-        self.brightness = .1
+        self.color = next(PlayerInfo.COLOR_WHEEL)
 
         # Keep track of what the lights are set to
-        self.light_settings = [Color.WHITE, Color.WHITE, Color.WHITE, Color.WHITE]
+        self.light_settings = [self.color] * 4
+
+        self.reset()
 
         # Subscriptions that have been made for the player
         # Needed so we can unsubscribe later
         self.subscriptions = subscriptions or []
 
-    def brighter(self):
-        # Increase the brightness by 10%
-        self.brightness = min(max(self.brightness + .1, 0.0), 1.0)
+    @property
+    def position(self):
+        return self.trail[-1]
 
-    def dimmer(self):
-        # Decrease the brightness by 10%
-        self.brightness = min(max(self.brightness - .1, 0.0), 1.0)
+    def reset(self):
+        x, _ = initial_pos = (random.randrange(WIDTH), random.randrange(HEIGHT))
+        if x > WIDTH//2:
+            self.direction = 'l'
+        else:
+            self.direction = 'r'
 
-    def next_light(self):
-        # Select the next light
-        self.selected_light = (self.selected_light + 1) % len(self.light_settings)
+        self.trail = deque()
+        self.trail.append(initial_pos)
 
-    def prev_light(self):
-        # Select the previous light
-        self.selected_light = (self.selected_light - 1) % len(self.light_settings)
+        self.dead = False
 
-    def _next_color(self, color):
-        # Compute the next color in the rainbow
-        try:
-            index = Color.RAINBOW.index(color)
-            return Color.RAINBOW[(index + 1) % len(Color.RAINBOW)]
-        except ValueError:
-            return Color.RAINBOW[0]
+        self.brightness = 1
 
-    def _prev_color(self, color):
-        # Compute the previous color in the rainbow
-        try:
-            index = Color.RAINBOW.index(color)
-            return Color.RAINBOW[(index - 1) % len(Color.RAINBOW)]
-        except ValueError:
-            return Color.RAINBOW[0]
+        self.moved = False
 
-    def next_setting(self):
-        # Sets the currently selected light to its next state
-        cur = self.light_settings[self.selected_light]
-        self.light_settings[self.selected_light] = self._next_color(cur)
+    def up(self):
+        if self.direction == 'd': return
+        if self.moved: return
+        self.direction = 'u'
+        self.moved = True
 
-    def prev_setting(self):
-        # Sets the currently selected light to its previous state
-        cur = self.light_settings[self.selected_light]
-        self.light_settings[self.selected_light] = self._prev_color(cur)
+    def down(self):
+        if self.direction == 'u': return
+        if self.moved: return
+        self.direction = 'd'
+        self.moved = True
 
+    def left(self):
+        if self.direction == 'r': return
+        if self.moved: return
+        self.direction = 'l'
+        self.moved = True
+
+    def right(self):
+        if self.direction == 'l': return
+        if self.moved: return
+        self.direction = 'r'
+        self.moved = True
+
+    async def move(self, players):
+        if self.dead:
+            return
+
+        dx, dy = 0, 0
+        if self.direction == 'u':
+            dy = -1
+        elif self.direction == 'd':
+            dy = 1
+        elif self.direction == 'l':
+            dx = -1
+        elif self.direction == 'r':
+            dx = 1
+
+        x, y = self.position
+        npos = (x+dx, y+dy)
+        nx, ny = npos
+
+        if nx < 0 or nx >= WIDTH or ny < 0 or ny >= HEIGHT or any((npos in p.trail for p in players)):
+            self.dead = True
+            self.brightness = 0
+            return
+
+        self.trail.append(npos)
+        self.moved = False
+
+    def draw(self, fb):
+        for x, y in self.trail:
+            color = hex_to_rgb(self.color)
+            fb.set(x, y, color)
 
 class GameComponent(ApplicationSession):
     players = {}
@@ -230,21 +270,19 @@ class GameComponent(ApplicationSession):
             return
 
         if button == Button.UP:
-            player.next_setting()
+            player.up()
         elif button == Button.DOWN:
-            player.prev_setting()
+            player.down()
         elif button == Button.LEFT:
-            player.next_light()
+            player.left()
         elif button == Button.RIGHT:
-            player.prev_light()
+            player.right()
         elif button == Button.A:
-            player.brighter()
+            pass
         elif button == Button.B:
-            player.dimmer()
+            pass
         elif button == Button.SELECT:
-            self.publish('badge.' + str(badge_id) + '.text', 0, 0, 'You pressed select! Wow!', style=1)
-
-        await self.set_lights(player)
+            self.publish('badge.' + str(badge_id) + '.text', 0, 0, 'Hi!', style=1)
 
     async def on_player_join(self, badge_id):
         """
@@ -290,11 +328,54 @@ class GameComponent(ApplicationSession):
         :return: None
         """
 
+        self.screen = flaschen.Flaschen('scootaloo.hackafe.net', 1337, 512, 32, 16, True)
+
         # Subscribe to all necessary things
         await self.subscribe(self.on_player_join, 'game.' + GAME_ID + '.player.join')
         await self.subscribe(self.on_player_leave, 'game.' + GAME_ID + '.player.leave')
         await self.subscribe(self.game_register, 'game.request_register')
         await self.game_register()
+
+        while True:
+            while len(self.players) < 2:
+                for player in self.players.values():
+                    player.draw(self.screen)
+                    self.screen.send()
+                await asyncio.sleep(.5)
+
+            await asyncio.sleep(2)
+            self.screen.clear()
+
+            while sum((not p.dead for p in self.players.values())) > 1:
+                for player in self.players.values():
+                    player.draw(self.screen)
+                    await player.move(self.players.values())
+                    await self.set_lights(player)
+                self.screen.send()
+
+                await asyncio.sleep(.05)
+
+            for _ in range(10):
+                for on in (True, False):
+                    self.screen.clear()
+                    for player in self.players.values():
+                        if not player.dead:
+                            player.brightness = 1 if on else 0
+
+                            if on:
+                                player.draw(self.screen)
+                        else:
+                            player.draw(self.screen)
+
+                    self.screen.send()
+                    await asyncio.sleep(.1)
+
+            self.screen.clear()
+            self.screen.send()
+
+            for player in self.players.values():
+                player.reset()
+            
 
     def onDisconnect(self):
         """
