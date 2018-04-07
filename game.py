@@ -300,8 +300,7 @@ class Portal(Entity):
     def link(self, other):
         self.other = other
 
-#POWERUPS = [JumpPowerup, SpeedPowerup, PortalPowerup]
-POWERUPS = [PortalPowerup]
+POWERUPS = [JumpPowerup, SpeedPowerup, PortalPowerup]
 
 class PlayerInfo:
     COLOR_WHEEL = itertools.cycle(DOT_COLORS)
@@ -645,7 +644,7 @@ class GameComponent(ApplicationSession):
             while sum((not p.dead for p in self.players.values())) > 1:
                 # approx every 10 seconds
                 if time.time() >= next_powerup:
-                    next_powerup = time.time() + .5
+                    next_powerup = time.time() + 5
                     x, y = random.randrange(WIDTH), random.randrange(HEIGHT)
                     self.powerups.append(random.choice(POWERUPS)(x, y))
 
