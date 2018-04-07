@@ -97,7 +97,41 @@ GAME_JOIN_LOCATION = None
 WIDTH = 512
 HEIGHT = 32
 
+TORUS_H = False
+TORUS_V = False
+
 DOT_COLORS = [Color.BLUE, Color.RED, Color.GREEN, Color.PURPLE, Color.CYAN, Color.ORANGE, Color.YELLOW, Color.PINK, Color.WHITE]
+
+def dxdy_to_dir(dx, dy):
+    if dx > 0:
+        return 'r'
+    elif dx < 0:
+        return 'l'
+    elif dy > 0:
+        return 'd'
+    elif dy < 0:
+        return 'u'
+
+def dir_to_dxdy(direction):
+    if direction == 'r':
+        return (1, 0)
+    elif direction == 'l':
+        return (-1, 0)
+    elif direction == 'd':
+        return (0, 1)
+    elif direction == 'u':
+        return (0, -1)
+
+def dir_to_num(direction):
+    return {
+        'u': 0,
+        'r': 1,
+        'd': 2,
+        'l': 3,
+    }[direction.lower()]
+
+def num_to_dir(direction):
+    return ['u', 'r', 'd', 'l'][direction % 4]
 
 class Powerup:
     def __init__(self, x, y, kind):
@@ -112,6 +146,9 @@ class Powerup:
 
     def activate(self, player):
         self.activated = True
+
+    def activate_secondary(self, player):
+        pass
 
     def consume(self):
         self.consumed = True
@@ -152,7 +189,119 @@ class SpeedPowerup(Powerup):
     def done(self, player):
         player.moves = 1
 
-POWERUPS = [JumpPowerup, SpeedPowerup]
+class PortalPowerup(Powerup):
+    def __init__(self, x, y):
+        super().__init__(x, y, 'Portal')
+        self.color = Color.ORANGE
+        self._activated = (False, False)
+        self.orange_deployed = False
+        self.blue_deployed = False
+        self.orange_activated = False
+        self.blue_activated = False
+        self.orange_portal = None
+        self.blue_portal = None
+
+    @property
+    def exhausted(self):
+        return self.orange_deployed and self.blue_deployed
+
+    @property
+    def activated(self):
+        return self.orange_activated or self.blue_activated
+
+    @activated.setter
+    def activated(self, val):
+        pass
+
+    def activate(self, player):
+        self.orange_activated = True
+
+    def activate_secondary(self, player):
+        self.blue_activated = True
+
+    def set_orange(self, portal):
+        self.orange_deployed = True
+        self.orange_portal = portal
+
+        if self.blue_portal:
+            self.blue_portal.link(self.orange_portal)
+            self.orange_portal.link(self.blue_portal)
+
+    def set_blue(self, portal):
+        self.blue_deployed = True
+        self.blue_portal = portal
+
+        if self.orange_portal:
+            self.orange_portal.link(self.blue_portal)
+            self.blue_portal.link(self.orange_portal)
+
+class Entity:
+    def __init__(self, x, y, kind):
+        self.x = x
+        self.y = y
+        self.position = (x, y)
+        self.kind = kind
+
+    def draw(self, fb):
+        pass
+
+    def collide(self, x, y):
+        return False
+
+class Portal(Entity):
+    def __init__(self, x, y, direction, color):
+        super().__init__(x, y, 'Portal')
+
+        self.direction = direction
+        self.other = None
+        self.color = color
+
+    def points(self):
+        horiz = [(self.x + n, self.y) for n in range(-2, 3)]
+        vert = [(self.x, self.y + n) for n in range(-2, 3)]
+
+        if self.direction == 'r':
+            return vert
+        elif self.direction == 'l':
+            return list(reversed(vert))
+        elif self.direction == 'u':
+            return horiz
+        elif self.direction == 'd':
+            return list(reversed(horiz))
+
+    def collide(self, x, y):
+        return (x, y) in self.points()
+
+    def calculate_path(self, x, y, dx, dy):
+        if self.linked:
+            if self.collide(x, y):
+                dirnum = dir_to_num(dxdy_to_dir(dx, dy))
+                diff = dirnum - dir_to_num(self.direction)
+                new_dir = num_to_dir(dir_to_num(self.other.direction) + diff + 2)
+                new_dx, new_dy = dir_to_dxdy(new_dir)
+
+                pos_off = self.points().index((x, y))
+                new_pos = self.other.points()[pos_off]
+
+                return new_pos, (new_dx, new_dy)
+            else:
+                return (x, y), (dx, dy)
+        else:
+            return (x, y), (dx, dy)
+
+    def draw(self, fb):
+        for x, y in self.points():
+            fb.set(x, y, hex_to_rgb(self.color))
+
+    @property
+    def linked(self):
+        return self.other is not None
+
+    def link(self, other):
+        self.other = other
+
+#POWERUPS = [JumpPowerup, SpeedPowerup, PortalPowerup]
+POWERUPS = [PortalPowerup]
 
 class PlayerInfo:
     COLOR_WHEEL = itertools.cycle(DOT_COLORS)
@@ -169,6 +318,7 @@ class PlayerInfo:
 
         self.torus = torus
         self.moves = 1
+        self.invincible = False
 
         # Keep track of what the lights are set to
         self.light_settings = [self.color] * 4
@@ -216,6 +366,10 @@ class PlayerInfo:
     def nommed(self):
         return not bool(self.trail)
 
+    def a(self):
+        if self.powerup:
+            self.powerup.activate_secondary(self)
+
     def b(self):
         if self.powerup:
             self.powerup.activate(self)
@@ -244,7 +398,7 @@ class PlayerInfo:
         self.direction = 'r'
         self.moved = True
 
-    async def move(self, players, powerups):
+    async def move(self, players, powerups, entities):
         if self.dead:
             return
 
@@ -265,6 +419,20 @@ class PlayerInfo:
                 if kind == 'Jump':
                     dx *= 4
                     dy *= 4
+                elif kind == 'Portal':
+                    def rot_180(d):
+                        return {'u':'d','l':'r','d':'u','r':'l'}[d]
+
+                    if self.powerup.orange_activated and not self.powerup.orange_deployed:
+                        orange = Portal(self.position[0] + 10 * dx, self.position[1] + 10 * dy, self.direction, Color.ORANGE)
+                        self.powerup.set_orange(orange)
+
+                        entities.append(orange)
+                    elif self.powerup.blue_activated and not self.powerup.blue_deployed:
+                        blue = Portal(self.position[0] + 10 * dx, self.position[1] + 10 * dy, self.direction, Color.CYAN)
+                        self.powerup.set_blue(blue)
+
+                        entities.append(blue)
 
                 self.powerup.tick()
 
@@ -276,10 +444,17 @@ class PlayerInfo:
         npos = ((x+dx)%WIDTH if self.torus[0] else x+dx, (y+dy)%HEIGHT if self.torus[1] else y+dy)
         nx, ny = npos
 
-        if nx < 0 or nx >= WIDTH or ny < 0 or ny >= HEIGHT or any((npos in p.trail for p in players)):
-            self.dead = True
-            self.brightness = 0
-            return
+        for entity in entities:
+            if entity.collide(*npos):
+                if entity.kind == 'Portal':
+                    npos, ndxdy = entity.calculate_path(*npos, dx, dy)
+                    self.direction = dxdy_to_dir(*ndxdy)
+
+        if not self.invincible:
+            if nx < 0 or nx >= WIDTH or ny < 0 or ny >= HEIGHT or any((npos in p.trail for p in players)):
+                self.dead = True
+                self.brightness = 0
+                return
 
         for powerup in powerups:
             if powerup.position == npos:
@@ -391,7 +566,7 @@ class GameComponent(ApplicationSession):
         elif button == Button.RIGHT:
             player.right()
         elif button == Button.A:
-            pass
+            player.a()
         elif button == Button.B:
             player.b()
         elif button == Button.SELECT:
@@ -415,7 +590,7 @@ class GameComponent(ApplicationSession):
         #release_sub = await self.subscribe(self.on_button_release, 'badge.' + str(badge_id) + '.button.release')
 
         # Add an entry to keep track of the player's game-state
-        self.players[badge_id] = PlayerInfo(badge_id, torus=(False, False), subscriptions=[press_sub])
+        self.players[badge_id] = PlayerInfo(badge_id, torus=(TORUS_H, TORUS_V), subscriptions=[press_sub])
 
         self.publish('badge.' + str(badge_id) + '.clear_text')
         await self.set_lights(self.players[badge_id])
@@ -441,6 +616,7 @@ class GameComponent(ApplicationSession):
 
         self.screen = flaschen.Flaschen('scootaloo.hackafe.net', 1337, WIDTH, HEIGHT, 16, True)
         self.powerups = []
+        self.entities = []
 
         # Subscribe to all necessary things
         await self.subscribe(self.on_player_join, 'game.' + GAME_ID + '.player.join')
@@ -469,19 +645,22 @@ class GameComponent(ApplicationSession):
             while sum((not p.dead for p in self.players.values())) > 1:
                 # approx every 10 seconds
                 if time.time() >= next_powerup:
-                    next_powerup = time.time() + 5
+                    next_powerup = time.time() + .5
                     x, y = random.randrange(WIDTH), random.randrange(HEIGHT)
                     self.powerups.append(random.choice(POWERUPS)(x, y))
 
                 for player in self.players.values():
                     player.draw(self.screen)
                     for _ in range(player.moves):
-                        await player.move(self.players.values(), self.powerups)
+                        await player.move(self.players.values(), self.powerups, self.entities)
                     #self.publish(target, 0, 2, "Power: " + (str(player.powerup) if player.powerup else 'None'))
                     await self.set_lights(player)
 
                 for powerup in self.powerups:
                     powerup.draw(self.screen)
+
+                for entity in self.entities:
+                    entity.draw(self.screen)
 
                 self.screen.send()
                 self.screen.clear()
@@ -526,6 +705,7 @@ class GameComponent(ApplicationSession):
                 player.reset()
 
             self.powerups = []
+            self.entities = []
             
 
     def onDisconnect(self):
