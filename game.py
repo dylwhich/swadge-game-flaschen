@@ -97,13 +97,78 @@ GAME_JOIN_LOCATION = None
 WIDTH = 512
 HEIGHT = 32
 
-class PlayerInfo:
-    COLOR_WHEEL = itertools.cycle(Color.RAINBOW)
+DOT_COLORS = [Color.BLUE, Color.RED, Color.GREEN, Color.PURPLE, Color.CYAN, Color.ORANGE, Color.YELLOW, Color.PINK, Color.WHITE]
 
-    def __init__(self, badge_id, subscriptions=None):
+class Powerup:
+    def __init__(self, x, y, kind):
+        self.kind = kind
+        self.x = x
+        self.y = y
+        self.position = (x, y)
+        self.consumed = False
+        self.activated = False
+        self.ticks = 1
+        self.color = Color.WHITE
+
+    def activate(self, player):
+        self.activated = True
+
+    def consume(self):
+        self.consumed = True
+
+    @property
+    def exhausted(self):
+        return not bool(self.ticks)
+
+    def tick(self):
+        if self.ticks:
+            self.ticks -= 1
+
+    def draw(self, fb):
+        if not self.consumed:
+            fb.set(self.x, self.y, hex_to_rgb(self.color))
+
+    def done(self, player):
+        pass
+
+    def __str__(self):
+        return self.kind
+
+class JumpPowerup(Powerup):
+    def __init__(self, x, y):
+        super().__init__(x, y, 'Jump')
+        self.color = Color.WHITE
+
+class SpeedPowerup(Powerup):
+    def __init__(self, x, y):
+        super().__init__(x, y, 'Speed')
+        self.ticks = 30
+        self.color = Color.GREEN
+
+    def activate(self, player):
+        super().activate(player)
+        player.moves = 2
+
+    def done(self, player):
+        player.moves = 1
+
+POWERUPS = [JumpPowerup, SpeedPowerup]
+
+class PlayerInfo:
+    COLOR_WHEEL = itertools.cycle(DOT_COLORS)
+
+    def __init__(self, badge_id, torus=(False, False), subscriptions=None):
+        self.wins = 0
+        self.plays = 0
+        self.maxlen = 0
+        self.powerup = None
+
         self.badge_id = badge_id
 
         self.color = next(PlayerInfo.COLOR_WHEEL)
+
+        self.torus = torus
+        self.moves = 1
 
         # Keep track of what the lights are set to
         self.light_settings = [self.color] * 4
@@ -125,14 +190,35 @@ class PlayerInfo:
         else:
             self.direction = 'r'
 
-        self.trail = deque()
+        self.maxlen = 0
+
+        self.powerup = None
+        self.moves = 1
+
+        # add maxlen=... to make the trails go away
+        self.trail = deque()#maxlen=100 + self.wins * 6 + self.plays * 4)
         self.trail.append(initial_pos)
 
         self.dead = False
 
-        self.brightness = 1
+        self.brightness = .1
 
         self.moved = False
+
+    def nom(self):
+        if not self.maxlen:
+            self.maxlen = len(self.trail)
+
+        for _ in range(max(self.maxlen // 30, 1)):
+            if self.trail:
+                self.trail.popleft()
+
+    def nommed(self):
+        return not bool(self.trail)
+
+    def b(self):
+        if self.powerup:
+            self.powerup.activate(self)
 
     def up(self):
         if self.direction == 'd': return
@@ -158,7 +244,7 @@ class PlayerInfo:
         self.direction = 'r'
         self.moved = True
 
-    async def move(self, players):
+    async def move(self, players, powerups):
         if self.dead:
             return
 
@@ -172,8 +258,22 @@ class PlayerInfo:
         elif self.direction == 'r':
             dx = 1
 
+        if self.powerup:
+            if self.powerup.activated and not self.powerup.exhausted:
+                kind = self.powerup.kind
+
+                if kind == 'Jump':
+                    dx *= 4
+                    dy *= 4
+
+                self.powerup.tick()
+
+            if self.powerup.exhausted:
+                self.powerup.done(self)
+                self.powerup = None
+
         x, y = self.position
-        npos = (x+dx, y+dy)
+        npos = ((x+dx)%WIDTH if self.torus[0] else x+dx, (y+dy)%HEIGHT if self.torus[1] else y+dy)
         nx, ny = npos
 
         if nx < 0 or nx >= WIDTH or ny < 0 or ny >= HEIGHT or any((npos in p.trail for p in players)):
@@ -181,12 +281,25 @@ class PlayerInfo:
             self.brightness = 0
             return
 
+        for powerup in powerups:
+            if powerup.position == npos:
+                if not self.powerup:
+                    self.powerup = powerup
+
+                powerup.consume()
+
         self.trail.append(npos)
         self.moved = False
 
     def draw(self, fb):
-        for x, y in self.trail:
+        for n, (x, y) in enumerate(self.trail):
             color = hex_to_rgb(self.color)
+
+            if self.powerup and len(self.trail) - n < 10:
+                color = hex_to_rgb(self.powerup.color)
+            elif self.powerup and len(self.trail) - n == 10:
+                color = hex_to_rgb(Color.WHITE)
+
             fb.set(x, y, color)
 
 class GameComponent(ApplicationSession):
@@ -280,7 +393,7 @@ class GameComponent(ApplicationSession):
         elif button == Button.A:
             pass
         elif button == Button.B:
-            pass
+            player.b()
         elif button == Button.SELECT:
             self.publish('badge.' + str(badge_id) + '.text', 0, 0, 'Hi!', style=1)
 
@@ -302,12 +415,10 @@ class GameComponent(ApplicationSession):
         #release_sub = await self.subscribe(self.on_button_release, 'badge.' + str(badge_id) + '.button.release')
 
         # Add an entry to keep track of the player's game-state
-        self.players[badge_id] = PlayerInfo(badge_id, subscriptions=[press_sub])
+        self.players[badge_id] = PlayerInfo(badge_id, torus=(False, False), subscriptions=[press_sub])
 
+        self.publish('badge.' + str(badge_id) + '.clear_text')
         await self.set_lights(self.players[badge_id])
-
-        # Give the supporters a nice message on their screen
-        self.publish('badge.' + str(badge_id) + '.text', 0, 24, "THANK YOU for supporting us!", style=1)
 
     async def on_player_leave(self, badge_id):
         """
@@ -328,7 +439,8 @@ class GameComponent(ApplicationSession):
         :return: None
         """
 
-        self.screen = flaschen.Flaschen('scootaloo.hackafe.net', 1337, 512, 32, 16, True)
+        self.screen = flaschen.Flaschen('scootaloo.hackafe.net', 1337, WIDTH, HEIGHT, 16, True)
+        self.powerups = []
 
         # Subscribe to all necessary things
         await self.subscribe(self.on_player_join, 'game.' + GAME_ID + '.player.join')
@@ -337,44 +449,83 @@ class GameComponent(ApplicationSession):
         await self.game_register()
 
         while True:
+            # Wait until there are two players
             while len(self.players) < 2:
                 for player in self.players.values():
                     player.draw(self.screen)
-                    self.screen.send()
+                self.screen.send()
                 await asyncio.sleep(.5)
+
+            # Draw out everyone's dots for a couple seconds
+            for player in self.players.values():
+                player.draw(self.screen)
+            self.screen.send()
 
             await asyncio.sleep(2)
             self.screen.clear()
 
+            next_powerup = 0
+            # Move players until only one (or none) are left
             while sum((not p.dead for p in self.players.values())) > 1:
+                # approx every 10 seconds
+                if time.time() >= next_powerup:
+                    next_powerup = time.time() + 5
+                    x, y = random.randrange(WIDTH), random.randrange(HEIGHT)
+                    self.powerups.append(random.choice(POWERUPS)(x, y))
+
                 for player in self.players.values():
                     player.draw(self.screen)
-                    await player.move(self.players.values())
+                    for _ in range(player.moves):
+                        await player.move(self.players.values(), self.powerups)
+                    #self.publish(target, 0, 2, "Power: " + (str(player.powerup) if player.powerup else 'None'))
                     await self.set_lights(player)
+
+                for powerup in self.powerups:
+                    powerup.draw(self.screen)
+
                 self.screen.send()
+                self.screen.clear()
 
                 await asyncio.sleep(.05)
 
-            for _ in range(10):
-                for on in (True, False):
+            # Flash the winner's strings
+            while any((not player.nommed() for player in self.players.values() if player.dead)):
+                for on in (True, True, True, False, False, False, False):
                     self.screen.clear()
-                    for player in self.players.values():
+                    for player in list(self.players.values()):
                         if not player.dead:
-                            player.brightness = 1 if on else 0
+                            player.brightness = .1 if on else 0
 
                             if on:
+                                self.publish('badge.' + str(player.badge_id) + '.text', 0, 24, "You win!!!", style=1)
                                 player.draw(self.screen)
+                            else:
+                                self.publish('badge.' + str(player.badge_id) + '.text', 0, 24, "          ", style=1)
                         else:
+                            player.nom()
                             player.draw(self.screen)
 
                     self.screen.send()
-                    await asyncio.sleep(.1)
+                    await asyncio.sleep(.1 / 3)
+
+            # Update the players' text
+            for player in self.players.values():
+                if not player.dead:
+                    player.wins += 1
+
+                player.plays += 1
+                target = 'badge.{}.text'.format(player.badge_id)
+                self.publish(target, 0, 0, "Plays: " + str(player.plays))
+                self.publish(target, 0, 1, "Wins:  " + str(player.wins))
+
 
             self.screen.clear()
             self.screen.send()
 
             for player in self.players.values():
                 player.reset()
+
+            self.powerups = []
             
 
     def onDisconnect(self):
