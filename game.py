@@ -641,6 +641,8 @@ class GameComponent(ApplicationSession):
 
             # Draw out everyone's dots for a couple seconds
             for player in self.players.values():
+                player.brightness = .1
+                await self.set_lights(player)
                 player.draw(self.screen)
             self.screen.send()
 
@@ -687,11 +689,13 @@ class GameComponent(ApplicationSession):
 
                             if on:
                                 self.publish('badge.' + str(player.badge_id) + '.text', 0, 24, "You win!!!", style=1)
+                                player.brightness = .1
                                 await self.set_lights(player)
                                 player.draw(self.screen)
                             else:
                                 self.publish('badge.' + str(player.badge_id) + '.text', 0, 24, "          ", style=1)
-                                self.publish('badge.' + str(player.badge_id) + '.lights_static', [Color.BLACK] * 4)
+                                player.brightness = 0
+                                await self.set_lights(player)
 
                         else:
                             player.nom()
