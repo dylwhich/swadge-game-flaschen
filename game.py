@@ -640,13 +640,16 @@ class GameComponent(ApplicationSession):
             self.screen.clear()
 
             next_powerup = 0
+            powerup_count = len(self.players) + 5
             # Move players until only one (or none) are left
             while sum((not p.dead for p in self.players.values())) > 1:
                 # approx every 10 seconds
                 if time.time() >= next_powerup:
                     next_powerup = time.time() + 5
-                    x, y = random.randrange(WIDTH), random.randrange(HEIGHT)
-                    self.powerups.append(random.choice(POWERUPS)(x, y))
+                    for _ in range(powerup_count):
+                        x, y = random.randrange(WIDTH), random.randrange(HEIGHT)
+                        self.powerups.append(random.choice(POWERUPS)(x, y))
+                    powerup_count = 1
 
                 for player in self.players.values():
                     player.draw(self.screen)
