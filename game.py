@@ -100,6 +100,8 @@ HEIGHT = 32
 TORUS_H = False
 TORUS_V = False
 
+TICK_RATE = 20
+
 DOT_COLORS = [Color.BLUE, Color.RED, Color.GREEN, Color.PURPLE, Color.CYAN, Color.ORANGE, Color.YELLOW, Color.PINK, Color.WHITE]
 
 def dxdy_to_dir(dx, dy):
@@ -171,10 +173,12 @@ class Powerup:
     def __str__(self):
         return self.kind
 
+
 class JumpPowerup(Powerup):
     def __init__(self, x, y):
         super().__init__(x, y, 'Jump')
         self.color = Color.WHITE
+
 
 class SpeedPowerup(Powerup):
     def __init__(self, x, y):
@@ -188,6 +192,16 @@ class SpeedPowerup(Powerup):
 
     def done(self, player):
         player.moves = 1
+
+
+class GlobalSpeedPowerup(Powerup):
+    def __init__(self, x, y):
+        super().__init__(x, y, 'GlobalSpeed')
+        global TICK_RATE
+        TICK_RATE = int(TICK_RATE * 1.3)
+        self.color = Color.RED
+        self.ticks = 0
+
 
 class PortalPowerup(Powerup):
     def __init__(self, x, y):
@@ -248,6 +262,7 @@ class Entity:
     def collide(self, x, y):
         return False
 
+
 class Portal(Entity):
     def __init__(self, x, y, direction, color):
         super().__init__(x, y, 'Portal')
@@ -300,7 +315,9 @@ class Portal(Entity):
     def link(self, other):
         self.other = other
 
-POWERUPS = [JumpPowerup, SpeedPowerup, PortalPowerup]
+
+POWERUPS = [JumpPowerup, SpeedPowerup, PortalPowerup, GlobalSpeedPowerup]
+
 
 class PlayerInfo:
     COLOR_WHEEL = itertools.cycle(DOT_COLORS)
@@ -667,7 +684,7 @@ class GameComponent(ApplicationSession):
                 self.screen.send()
                 self.screen.clear()
 
-                await asyncio.sleep(.05)
+                await asyncio.sleep(1 / TICK_RATE)
 
             # Flash the winner's strings
             while any((not player.nommed() for player in self.players.values() if player.dead)):
@@ -679,15 +696,18 @@ class GameComponent(ApplicationSession):
 
                             if on:
                                 self.publish('badge.' + str(player.badge_id) + '.text', 0, 24, "You win!!!", style=1)
+                                await self.set_lights(player)
                                 player.draw(self.screen)
                             else:
                                 self.publish('badge.' + str(player.badge_id) + '.text', 0, 24, "          ", style=1)
+                                self.publish('badge.' + str(player.badge_id) + '.lights_static', [Color.BLACK] * 4)
+
                         else:
                             player.nom()
                             player.draw(self.screen)
 
                     self.screen.send()
-                    await asyncio.sleep(.1 / 3)
+                    await asyncio.sleep(1 / TICK_RATE)
 
             # Update the players' text
             for player in self.players.values():
