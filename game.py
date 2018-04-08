@@ -666,7 +666,9 @@ class GameComponent(ApplicationSession):
                     for _ in range(player.moves):
                         await player.move(self.players.values(), self.powerups, self.entities)
                     #self.publish(target, 0, 2, "Power: " + (str(player.powerup) if player.powerup else 'None'))
-                    await self.set_lights(player)
+                    if player.dead and player.brightness is not None:
+                        await self.set_lights(player)
+                        player.brightness = None
 
                 for powerup in self.powerups:
                     powerup.draw(self.screen)
@@ -689,12 +691,10 @@ class GameComponent(ApplicationSession):
 
                             if on:
                                 self.publish('badge.' + str(player.badge_id) + '.text', 0, 24, "You win!!!", style=1)
-                                player.brightness = .1
                                 await self.set_lights(player)
                                 player.draw(self.screen)
                             else:
                                 self.publish('badge.' + str(player.badge_id) + '.text', 0, 24, "          ", style=1)
-                                player.brightness = 0
                                 await self.set_lights(player)
 
                         else:
