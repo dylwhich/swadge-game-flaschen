@@ -100,7 +100,7 @@ HEIGHT = 32
 TORUS_H = False
 TORUS_V = False
 
-TICK_RATE = 20
+TICK_RATE = 24
 
 DOT_COLORS = [Color.BLUE, Color.RED, Color.GREEN, Color.PURPLE, Color.CYAN, Color.ORANGE, Color.YELLOW, Color.PINK, Color.WHITE]
 
@@ -183,7 +183,7 @@ class JumpPowerup(Powerup):
 class SpeedPowerup(Powerup):
     def __init__(self, x, y):
         super().__init__(x, y, 'Speed')
-        self.ticks = 30
+        self.ticks = 60
         self.color = Color.GREEN
 
     def activate(self, player):
@@ -192,15 +192,6 @@ class SpeedPowerup(Powerup):
 
     def done(self, player):
         player.moves = 1
-
-
-class GlobalSpeedPowerup(Powerup):
-    def __init__(self, x, y):
-        super().__init__(x, y, 'GlobalSpeed')
-        global TICK_RATE
-        TICK_RATE = int(TICK_RATE * 1.3)
-        self.color = Color.RED
-        self.ticks = 0
 
 
 class PortalPowerup(Powerup):
@@ -316,7 +307,7 @@ class Portal(Entity):
         self.other = other
 
 
-POWERUPS = [JumpPowerup, SpeedPowerup, PortalPowerup, GlobalSpeedPowerup]
+POWERUPS = [JumpPowerup, SpeedPowerup, PortalPowerup]
 
 
 class PlayerInfo:
