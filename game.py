@@ -423,12 +423,12 @@ class PlayerInfo:
                         return {'u':'d','l':'r','d':'u','r':'l'}[d]
 
                     if self.powerup.orange_activated and not self.powerup.orange_deployed:
-                        orange = Portal(self.position[0] + 10 * dx, self.position[1] + 10 * dy, self.direction, Color.ORANGE)
+                        orange = Portal(max(0, min(WIDTH-1, self.position[0] + 10 * dx)), max(0, min(HEIGHT-1, self.position[1] + 10 * dy)), self.direction, Color.ORANGE)
                         self.powerup.set_orange(orange)
 
                         entities.append(orange)
                     elif self.powerup.blue_activated and not self.powerup.blue_deployed:
-                        blue = Portal(self.position[0] + 10 * dx, self.position[1] + 10 * dy, self.direction, Color.CYAN)
+                        blue = Portal(max(0, min(WIDTH-1, self.position[0] + 10 * dx)), max(0, min(HEIGHT-1, self.position[1] + 10 * dy)), self.direction, Color.CYAN)
                         self.powerup.set_blue(blue)
 
                         entities.append(blue)
